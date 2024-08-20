@@ -1,4 +1,4 @@
-ROOT_DIR='/home/pramod/Documents/Deeplearning/classifier_feb20/classifier/archive'
+ROOT_DIR='/home/pramod/Documents/archive'
 GPU = 0
 GPU = "0"
 """
@@ -23,3 +23,4 @@ EPOCHS=160
 GRID_SIZE=[3,2]
 DEVICE = 'cuda:0'
 lr = 0.001
+QAT = True

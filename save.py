@@ -158,47 +158,47 @@ def save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained,dest=os.
 
 #     heat_maps=[]
     
-    for i,class_name in enumerate(class_names):
+    # for i,class_name in enumerate(class_names):
         
-        # print(os.path.join(VAL_DIR,class_name))
-        # add complete path
-        temp=os.listdir(os.path.join(VAL_DIR,class_name))
-        dir_temp=os.path.join(VAL_DIR,class_name)+"/"
-        my_new_list = [dir_temp + x for x in temp]
-        image_paths.extend(my_new_list)
+    #     # print(os.path.join(VAL_DIR,class_name))
+    #     # add complete path
+    #     temp=os.listdir(os.path.join(VAL_DIR,class_name))
+    #     dir_temp=os.path.join(VAL_DIR,class_name)+"/"
+    #     my_new_list = [dir_temp + x for x in temp]
+    #     image_paths.extend(my_new_list)
 
 
-    image_paths=random.sample(image_paths,total_images)
-    print("[INFO]Creating Gradient images")
+    # image_paths=random.sample(image_paths,total_images)
+    # print("[INFO]Creating Gradient images")
 
-    for image_path in tqdm(image_paths):
-        # print(image_path)
-        image = cv2.imread(image_path)
-        orig_image = image.copy()
-        orig_image =cv2.resize(orig_image, (IMAGE_DIMS[0], IMAGE_DIMS[1]),interpolation = cv2.INTER_LINEAR)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((IMAGE_DIMS[0], IMAGE_DIMS[1])),
-            transforms.ToTensor(),
-        ])
-        image = transform(image)
-        image = torch.unsqueeze(image, 0)
-        image = image.to(DEVICE)
+    # for image_path in tqdm(image_paths):
+    #     # print(image_path)
+    #     image = cv2.imread(image_path)
+    #     orig_image = image.copy()
+    #     orig_image =cv2.resize(orig_image, (IMAGE_DIMS[0], IMAGE_DIMS[1]),interpolation = cv2.INTER_LINEAR)
+    #     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    #     transform = transforms.Compose([
+    #         transforms.ToPILImage(),
+    #         transforms.Resize((IMAGE_DIMS[0], IMAGE_DIMS[1])),
+    #         transforms.ToTensor(),
+    #     ])
+    #     image = transform(image)
+    #     image = torch.unsqueeze(image, 0)
+    #     image = image.to(DEVICE)
         
-        op, feats = model(image)
-        # print("Features size",feats.shape)
-        # print("Image shape:",orig_image.shape)
-        # print(feats.shape)
-        # make_dot(op.mean(), params=dict(model.parameters())).render("attached", format="png")
-        # make_dot(op).render("attached", format="png")
-        heat_maps.extend(visualise_image(feats , op , orig_image , model , IMAGE_DIMS))
+    #     op, feats = model(image)
+    #     # print("Features size",feats.shape)
+    #     # print("Image shape:",orig_image.shape)
+    #     # print(feats.shape)
+    #     # make_dot(op.mean(), params=dict(model.parameters())).render("attached", format="png")
+    #     # make_dot(op).render("attached", format="png")
+    #     heat_maps.extend(visualise_image(feats , op , orig_image , model , IMAGE_DIMS))
 
-    # heat_maps=torchvision.transforms.ToPILImage()
-    if "best" in path:
-        image_grid(heat_maps,[GRID_SIZE[0],GRID_SIZE[1]*2],True)
-    else:
-        image_grid(heat_maps,[GRID_SIZE[0],GRID_SIZE[1]*2],False)
+    # # heat_maps=torchvision.transforms.ToPILImage()
+    # if "best" in path:
+    #     image_grid(heat_maps,[GRID_SIZE[0],GRID_SIZE[1]*2],True)
+    # else:
+    #     image_grid(heat_maps,[GRID_SIZE[0],GRID_SIZE[1]*2],False)
 
 
 
