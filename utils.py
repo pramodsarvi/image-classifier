@@ -7,6 +7,8 @@ import os
 import torchvision
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.amp import GradScaler
+from torch import autocast
 
 
 # def train(model,train_loader,test_loader,criterion):
@@ -43,7 +45,11 @@ from torch.utils.data import DataLoader
 #     # save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
 #     print('TRAINING COMPLETE')
 
-def util_train(model,trainloader,criterion):
+
+def amp_util_train(model,trainloader,criterion,optimizer):
+
+    scaler = GradScaler()
+
     model.train()
     print('Training')
     train_running_loss = 0.0
@@ -56,7 +62,53 @@ def util_train(model,trainloader,criterion):
         # image = normalize_pretrained(image)
         image = image.to(DEVICE)
         labels = labels.to(DEVICE)
-        # optimizer.zero_grad()
+        optimizer.zero_grad()
+        # Forward pass.
+        # outputs = model(image)
+
+        with autocast(device_type='cuda', dtype=torch.float16):
+            outputs = model(input)
+            loss = criterion(outputs, labels)
+
+        scaler.scale(loss).backward()
+
+        # scaler.step() first unscales the gradients of the optimizer's assigned params.
+        # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
+        # otherwise, optimizer.step() is skipped.
+        scaler.step(optimizer)
+
+        # Updates the scale for next iteration.
+        scaler.update()
+
+        # Calculate the loss.
+        train_running_loss += loss.item()
+        # Calculate the accuracy.
+        _, preds = torch.max(outputs.data, 1)
+        train_running_correct += (preds == labels).sum().item()
+        # Backpropagation
+        loss.backward()
+        # Update the weights.
+        optimizer.step()
+    # Loss and accuracy for the complete epoch.
+    epoch_loss = train_running_loss / counter
+    epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
+    return epoch_loss, epoch_acc
+
+
+def util_train(model,trainloader,criterion,optimizer):
+    model.train()
+    print('Training')
+    train_running_loss = 0.0
+    train_running_correct = 0
+    counter = 0
+    for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
+        counter += 1
+        image, labels = data
+        image = torch.stack([T(img) for img in image])
+        # image = normalize_pretrained(image)
+        image = image.to(DEVICE)
+        labels = labels.to(DEVICE)
+        optimizer.zero_grad()
         # Forward pass.
         outputs = model(image)
         # Calculate the loss.
@@ -68,7 +120,7 @@ def util_train(model,trainloader,criterion):
         # Backpropagation
         loss.backward()
         # Update the weights.
-        # optimizer.step()
+        optimizer.step()
     # Loss and accuracy for the complete epoch.
     epoch_loss = train_running_loss / counter
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))

@@ -167,4 +167,6 @@ def main():
             evaluate(model, criterion, data_loader_test, device="cuda", print_freq=20)
 
 
-    
+    # https://github.com/lix19937/pytorch-quantization/tree/main/examples
+
+    sudo docker create -it --restart=always --net=host --runtime nvidia -e DISPLAY=$DISPLAY -v ~/ds6_3_volume:/app/ -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker -v /tmp/.X11-unix/:/tmp/.X11-unix --name nvcr.io/nvidia/deepstream  deepstream_6.3

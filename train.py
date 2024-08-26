@@ -22,7 +22,7 @@ def start_training(model,epochs,train_loader,valid_loader,optimizer,criterion):
     for epoch in range(epochs):
         epoch_time = time.time()
         print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-        train_epoch_loss, train_epoch_acc = util_train(model, train_loader,criterion)
+        train_epoch_loss, train_epoch_acc = amp_util_train(model, train_loader,criterion,optimizer)
         #print(exp_lr_scheduler.get_last_lr())
         valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
         # exp_lr_scheduler.step()
@@ -84,7 +84,7 @@ def main():
     print(f"{total_trainable_params:,} training parameters.")
 
     # Optimizer.
-    optimizer = torch.optim.AdamW(model.parameters(),lr=lr,)
+    optimizer = torch.optim.AdamW(model.parameters(),lr=lr)
     # Loss function.
     criterion = torch.nn.CrossEntropyLoss()
     # exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=70,gamma=0.01)
