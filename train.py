@@ -11,8 +11,10 @@ from utils import *
 # os.environ["CUDA_VISIBLE_DEVICES"] = webface_r50  
 from datasets import *
 from qat import quantized_model
-
+from torch.utils.data import Subset
 import mlflow
+from torchsampler import ImbalancedDatasetSampler
+
 
 # from torch.utils.tensorboard import SummaryWriter
 
@@ -32,17 +34,157 @@ class trainer():
         self.input_dims = input_dims
         self.lr = lr
         self.qat = qat
+        self.train_dataset, self.validation_dataset, self.classes =  self.prepare_dataset()
+        self.train_loader, self.validation_loader =  self.prepare_dataset()
+
+        self.qat = qat
+        self.optimizer = None
+        self.lr_scheduler = None
+        self.criterion = None
+        self.fp16 = None
+        self.qat()
     
+    def prepare_dataset(self):
+        dataset = datasets.ImageFolder(self.root,transform=(get_train_transform(IMAGE_DIMS, True))        )
+        dataset_size = len(dataset)
+        # Calculate the validation dataset size.
+        valid_size = int(VALID_SPLIT*dataset_size)
+        # Radomize the data indices.
+        indices = torch.randperm(len(dataset)).tolist()
+        # Training and validation sets.
+        dataset_train = Subset(dataset, indices[:-valid_size])
+        dataset_valid = Subset(dataset, indices[-valid_size:])
+        
+        return dataset_train, dataset_valid, dataset_train.classes
+
+    def prepare_data_loaders(self):
+
+        train_loader = DataLoader(
+            self.train_dataset, 
+            
+            batch_size=BATCH_SIZE, 
+            # sampler=DistributedSampler(dataset_train),
+            shuffle=False, num_workers=NUM_WORKERS
+        )
+        valid_loader = DataLoader(
+            self.validation_dataset,
+            # sampler=DistributedSampler(dataset_valid),
+            batch_size=BATCH_SIZE, 
+            shuffle=False, num_workers=NUM_WORKERS
+        )
+        return train_loader, valid_loader 
+
     def train(self):
-        pass
+        self.model.train()
+        print('Training')
+        train_running_loss = 0.0
+        train_running_correct = 0
+        counter = 0
+        for i, data in tqdm(enumerate(self.train_loader), total=len(self.train_loader)):
+            counter += 1
+            image, labels = data
+            image = torch.stack([T(img) for img in image])
+            # image = normalize_pretrained(image)
+            image = image.to(DEVICE)
+            labels = labels.to(DEVICE)
+            self.optimizer.zero_grad()
+            # Forward pass.
+            outputs = self.model(image)
 
-    def train_qat(self):
-        pass
+            # Calculate the loss.
+            loss = self.criterion(outputs, labels)
+            train_running_loss += loss.item()
+            # Calculate the accuracy.
+            _, preds = torch.max(outputs.data, 1)
+            train_running_correct += (preds == labels).sum().item()
+            # Backpropagation
+            loss.backward()
+            # Update the weights.
+            self.optimizer.step()
+        # Loss and accuracy for the complete epoch.
+        epoch_loss = train_running_loss / counter
+        epoch_acc = 100. * (train_running_correct / len(self.train_loader.dataset))
+        return epoch_loss, epoch_acc
 
-    def trainfp16(self):
-        pass
+
+    def prepare_qat(self):
+        if self.qat:
+            self.model = quantized_model(self.model).to(DEVICE)
+            quantization_config = torch.quantization.get_default_qconfig("fbgemm")
+            self.model.qconfig = quantization_config
+            torch.quantization.prepare_qat(self.model, inplace=True)
+
+    def train_fp16(self):
+        scaler = GradScaler()
+
+        self.model.train()
+        print('Training')
+        train_running_loss = 0.0
+        train_running_correct = 0
+        counter = 0
+        for i, data in tqdm(enumerate(self.train_loader), total=len(self.train_loader)):
+            counter += 1
+            image, labels = data
+            image = torch.stack([T(img) for img in image])
+            
+            image = image.to(DEVICE)
+            labels = labels.to(DEVICE)
+            self.optimizer.zero_grad()
+            # Forward pass.
+
+            with autocast(device_type='cuda', dtype=torch.float16):
+                outputs = self.model(image)
+                loss = self.criterion(outputs, labels)
+
+            scaler.scale(loss).backward()
+
+            # scaler.step() first unscales the gradients of the optimizer's assigned params.
+            # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
+            # otherwise, optimizer.step() is skipped.
+            scaler.step(self.optimizer)
+
+            # Updates the scale for next iteration.
+            scaler.update()
+
+            # Calculate the loss.
+            train_running_loss += loss.item()
+            # Calculate the accuracy.
+            _, preds = torch.max(outputs.data, 1)
+            train_running_correct += (preds == labels).sum().item()
+
+        # Loss and accuracy for the complete epoch.
+        epoch_loss = train_running_loss / counter
+        epoch_acc = 100. * (train_running_correct / len(self.train_loader.dataset))
+        return epoch_loss, epoch_acc
+
     def evaluate(self):
-        pass
+        self.model.eval()
+        print('Validation')
+        valid_running_loss = 0.0
+        valid_running_correct = 0
+        counter = 0
+        with torch.no_grad():
+            for i, data in tqdm(enumerate(self.validation_loader), total=len(self.validation_loader)):
+                counter += 1
+                
+                image, labels = data
+                # image = torch.stack([T(img) for img in image])
+                # image = normalize_pretrained(image)
+                image = image.to(DEVICE)
+                labels = labels.to(DEVICE)
+                # Forward pass.
+                outputs = self.model(image)
+                # Calculate the loss.
+                loss = self.criterion(outputs, labels)
+                valid_running_loss += loss.item()
+                # Calculate the accuracy.
+                _, preds = torch.max(outputs.data, 1)
+                valid_running_correct += (preds == labels).sum().item()
+            
+        # Loss and accuracy for the complete epoch.
+        epoch_loss = valid_running_loss / counter
+        epoch_acc = 100. * (valid_running_correct / len(self.validation_loader.dataset))
+        return epoch_loss, epoch_acc
 
     def benchmark(self):
         pass
@@ -52,48 +194,43 @@ class trainer():
 
     def log_mlflow_stats(self):
         pass
-
-
-
-def start_training(model,epochs,train_loader,valid_loader,optimizer,criterion):
-    train_loss, valid_loss = [], []
-    train_acc, valid_acc = [], []
-    # Start the training.
     
-    best_accuracy=0.0
-    best_model=model
-    for epoch in range(epochs):
-        epoch_time = time.time()
-        print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-        train_epoch_loss, train_epoch_acc = amp_util_train(model, train_loader,criterion,optimizer)
-        #print(exp_lr_scheduler.get_last_lr())
-        valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
-        # exp_lr_scheduler.step()
-        train_loss.append(train_epoch_loss)
-        valid_loss.append(valid_epoch_loss)
-        train_acc.append(train_epoch_acc)
-        valid_acc.append(valid_epoch_acc)
-        print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
-        print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
-        print('-'*50)
-        # time.sleep(5)
-        if valid_epoch_acc>best_accuracy:
-            best_model=model
-            best_accuracy=valid_epoch_acc
-            save_model(epoch, model, criterion,is_best=True)
-        save_model(epoch, model, criterion, False)
-        save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
-        print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
+    def to_onnx(self):
+        pass
 
 
-        mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
-        mlflow.log_metric("training accuracy", f"{train_epoch_acc:3f}", step=epoch)
-    # Save the trained model weights.
-    save_model(epochs, model, criterion, True)
-    # Save the loss and accuracy plots.
-    # torch.save(model,'/home/shalom/classifier/uniform_classifier/results/uniform_clsfr_efficientnet_pytorch_may6.pt')
-    save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
-    print('TRAINING COMPLETE')
+
+
+    def start_training(self,model,epochs,train_loader,valid_loader,optimizer,criterion):
+
+        best_accuracy=-1000.0
+
+        for epoch in range(self.epochs):
+
+            print(f"[INFO]: Epoch {epoch+1} of {self.epochs}")
+
+            train_epoch_loss, train_epoch_acc = amp_util_train(model, train_loader,criterion,optimizer)
+
+            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
+            # exp_lr_scheduler.step()
+
+            print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
+            print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
+            print('-'*50)
+            # time.sleep(5)
+            if valid_epoch_acc>best_accuracy:
+                # if the model is best then save the model to disk and later log it to mlflow
+                best_model=model
+                best_accuracy=valid_epoch_acc
+                save_model(epoch, model, criterion,is_best=True)
+            save_model(epoch, model, criterion, False)
+
+
+            mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
+            mlflow.log_metric("training accuracy", f"{train_epoch_acc:3f}", step=epoch)
+        # Save the trained model weights.
+        print('TRAINING COMPLETE')
+        # log best and last epoch accuracies and loss
 
 def main():
     
