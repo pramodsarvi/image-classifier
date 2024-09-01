@@ -36,6 +36,7 @@ def save_plots(train_acc, valid_acc, train_loss, valid_loss, pretrained,dest=os.
     plt.savefig(f"{dest}/efficient_net_acc{pretrained}.png")
     plt.close('all')
     # loss plots
+    
     plt.figure(figsize=(10, 7))
     plt.plot(
         train_loss, color='orange', linestyle='-', 

@@ -12,6 +12,49 @@ from utils import *
 from datasets import *
 from qat import quantized_model
 
+import mlflow
+
+# from torch.utils.tensorboard import SummaryWriter
+
+# # default `log_dir` is "runs" - we'll be more specific here
+# writer = SummaryWriter('runs/fashion_mnist_experiment_1')
+
+class trainer():
+
+    def __init__(self,model,epochs,gpu,root,save_path,batch_size,train_test_split,input_dims,lr,qat):
+        self.model = model
+        self.epochs = epochs
+        self.gpu = gpu
+        self.root = root
+        self.save_path = save_path
+        self.batch_size = batch_size
+        self.train_test_split = train_test_split
+        self.input_dims = input_dims
+        self.lr = lr
+        self.qat = qat
+    
+    def train(self):
+        pass
+
+    def train_qat(self):
+        pass
+
+    def trainfp16(self):
+        pass
+    def evaluate(self):
+        pass
+
+    def benchmark(self):
+        pass
+
+    def save_models(self):
+        pass
+
+    def log_mlflow_stats(self):
+        pass
+
+
+
 def start_training(model,epochs,train_loader,valid_loader,optimizer,criterion):
     train_loss, valid_loss = [], []
     train_acc, valid_acc = [], []
@@ -41,6 +84,10 @@ def start_training(model,epochs,train_loader,valid_loader,optimizer,criterion):
         save_model(epoch, model, criterion, False)
         save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
         print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
+
+
+        mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
+        mlflow.log_metric("training accuracy", f"{train_epoch_acc:3f}", step=epoch)
     # Save the trained model weights.
     save_model(epochs, model, criterion, True)
     # Save the loss and accuracy plots.
@@ -77,10 +124,10 @@ def main():
     
     
     # Total parameters and trainable parameters.
-    total_params = sum(p.numel() for p in model.parameters())
+    total_params = sum(p.squeeze().numel() for p in model.parameters())
     print(f"{total_params:,} total parameters.")
     total_trainable_params = sum(
-        p.numel() for p in model.parameters() if p.requires_grad)
+        p.squeeze().numel() for p in model.parameters() if p.requires_grad)
     print(f"{total_trainable_params:,} training parameters.")
 
     # Optimizer.
@@ -90,7 +137,34 @@ def main():
     # exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=70,gamma=0.01)
     # Lists to keep track of losses and accuracies.
     
-    start_training(model=model,epochs=epochs,train_loader=train_loader,valid_loader=valid_loader,optimizer=optimizer,criterion=criterion)
+
+
+    mlflow.set_tracking_uri("http://localhost:8080")
+    mlflow.set_experiment("test2")
+
+    model_name = "model_name_v3"
+    # with mlflow.start_run(run_name=model_name):
+
+    # mlflow.set_experiment("experiment name")
+    experiment = mlflow.get_experiment_by_name("test")
+
+    with mlflow.start_run(experiment_id=experiment.experiment_id,run_name=model_name):
+
+        start_training(model=model,epochs=epochs,train_loader=train_loader,valid_loader=valid_loader,optimizer=optimizer,criterion=criterion)
+        mlflow.log_param("model", model_name)
+        mlflow.log_metric('accuracy', 90)
+        mlflow.log_metric('recall_class_1', 90)
+        mlflow.log_metric('recall_class_0', 90)
+        mlflow.log_metric('f1_score_macro', 90)        
+        
+        # if "XGB" in model_name:
+        #     mlflow.xgboost.log_model(model, "model")
+        # else:
+        # mlflow.log_figure(fig1, "time_series_demand.png")
+        mlflow.pytorch.log_model(model, "model")  
+
+        
+
 
 
 if __name__ == "__main__":

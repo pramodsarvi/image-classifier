@@ -67,7 +67,7 @@ def amp_util_train(model,trainloader,criterion,optimizer):
         # outputs = model(image)
 
         with autocast(device_type='cuda', dtype=torch.float16):
-            outputs = model(input)
+            outputs = model(image)
             loss = criterion(outputs, labels)
 
         scaler.scale(loss).backward()
@@ -86,9 +86,9 @@ def amp_util_train(model,trainloader,criterion,optimizer):
         _, preds = torch.max(outputs.data, 1)
         train_running_correct += (preds == labels).sum().item()
         # Backpropagation
-        loss.backward()
+        # loss.backward()
         # Update the weights.
-        optimizer.step()
+        # optimizer.step()
     # Loss and accuracy for the complete epoch.
     epoch_loss = train_running_loss / counter
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
@@ -110,7 +110,16 @@ def util_train(model,trainloader,criterion,optimizer):
         labels = labels.to(DEVICE)
         optimizer.zero_grad()
         # Forward pass.
-        outputs = model(image)
+        # outputs = model(image)
+
+
+        with autocast(device_type='cuda', dtype=torch.float16):
+            outputs = model(image)
+            loss = criterion(outputs, labels)
+
+
+
+
         # Calculate the loss.
         loss = criterion(outputs, labels)
         train_running_loss += loss.item()
