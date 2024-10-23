@@ -46,54 +46,6 @@ from torch import autocast
 #     print('TRAINING COMPLETE')
 
 
-def amp_util_train(model,trainloader,criterion,optimizer):
-
-    scaler = GradScaler()
-
-    model.train()
-    print('Training')
-    train_running_loss = 0.0
-    train_running_correct = 0
-    counter = 0
-    for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
-        counter += 1
-        image, labels = data
-        image = torch.stack([T(img) for img in image])
-        # image = normalize_pretrained(image)
-        image = image.to(DEVICE)
-        labels = labels.to(DEVICE)
-        optimizer.zero_grad()
-        # Forward pass.
-        # outputs = model(image)
-
-        with autocast(device_type='cuda', dtype=torch.float16):
-            outputs = model(image)
-            loss = criterion(outputs, labels)
-
-        scaler.scale(loss).backward()
-
-        # scaler.step() first unscales the gradients of the optimizer's assigned params.
-        # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
-        # otherwise, optimizer.step() is skipped.
-        scaler.step(optimizer)
-
-        # Updates the scale for next iteration.
-        scaler.update()
-
-        # Calculate the loss.
-        train_running_loss += loss.item()
-        # Calculate the accuracy.
-        _, preds = torch.max(outputs.data, 1)
-        train_running_correct += (preds == labels).sum().item()
-        # Backpropagation
-        # loss.backward()
-        # Update the weights.
-        # optimizer.step()
-    # Loss and accuracy for the complete epoch.
-    epoch_loss = train_running_loss / counter
-    epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
-    return epoch_loss, epoch_acc
-
 
 def util_train(model,trainloader,criterion,optimizer):
     model.train()
@@ -134,36 +86,6 @@ def util_train(model,trainloader,criterion,optimizer):
     epoch_loss = train_running_loss / counter
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
     return epoch_loss, epoch_acc
-
-def validate(model,testloader,criterion):
-    model.eval()
-    print('Validation')
-    valid_running_loss = 0.0
-    valid_running_correct = 0
-    counter = 0
-    with torch.no_grad():
-        for i, data in tqdm(enumerate(testloader), total=len(testloader)):
-            counter += 1
-            
-            image, labels = data
-            # image = torch.stack([T(img) for img in image])
-            # image = normalize_pretrained(image)
-            image = image.to(DEVICE)
-            labels = labels.to(DEVICE)
-            # Forward pass.
-            outputs = model(image)
-            # Calculate the loss.
-            loss = criterion(outputs, labels)
-            valid_running_loss += loss.item()
-            # Calculate the accuracy.
-            _, preds = torch.max(outputs.data, 1)
-            valid_running_correct += (preds == labels).sum().item()
-        
-    # Loss and accuracy for the complete epoch.
-    epoch_loss = valid_running_loss / counter
-    epoch_acc = 100. * (valid_running_correct / len(testloader.dataset))
-    return epoch_loss, epoch_acc
-
 
 def save_model(epoch,model,criterion,is_best=False):
 

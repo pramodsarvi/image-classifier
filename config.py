@@ -1,4 +1,4 @@
-ROOT_DIR='/home/pramod/Documents/archive'
+ROOT_DIR='/home/pramod/Documents/archive/data'
 GPU = 0
 GPU = "0"
 """
@@ -23,4 +23,4 @@ EPOCHS=10
 GRID_SIZE=[3,2]
 DEVICE = 'cuda:0'
 lr = 0.001
-QAT = False
+QAT = True
