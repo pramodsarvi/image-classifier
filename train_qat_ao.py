@@ -36,34 +36,34 @@ class QuantizeTrainModel(nn.Module):
     def clone(self):
         clone = QuantizeTrainModel(self.pretrained, self.num_classes)
         clone.load_state_dict(self.state_dict())
-        if self.is_cuda():
-            clone.cuda()
+        clone.to("cpu")
         return clone
     
-    def fused_module_inplace(self):
-        """
-        Fusing the model for resnet family only. Print out the model architecture
-        to know how the logic works. Note that during the quantize fusion, 
-        conv + bn + act or conv + bn should be bundled to together
-        """
-        self.train()
+    # def fused_module_inplace(self):
+    #     """
+    #     Fusing the model for resnet family only. Print out the model architecture
+    #     to know how the logic works. Note that during the quantize fusion, 
+    #     conv + bn + act or conv + bn should be bundled to together
+    #     """
+    #     self.train()
 
-        for module_name, module in self.named_children():
-            if module_name in ["0","8"]:
-                torch.ao.quantization.fuse_modules_qat(module, ["0","1"], inplace=True)
-            else:
-                for basic_block_name, basic_block in module.named_children():
-                    if "MBConv" == str(basic_block).split("(")[0]:
-                        for sub_block_name, sub_block in basic_block.named_children():
-                            for sub_sub_block_name, sub_sub_block in sub_block.named_children():
-                                if "Conv2dNormActivation" == str(sub_sub_block).split("(")[0]:
-                                    torch.ao.quantization.fuse_modules_qat(sub_sub_block, [["0","1"]], inplace=True)
+    #     for module_name, module in self.named_children():
+    #         if module_name in ["0","8"]:
+    #             torch.ao.quantization.fuse_modules_qat(module, ["0","1"], inplace=True)
+    #         else:
+    #             for basic_block_name, basic_block in module.named_children():
+    #                 if "MBConv" == str(basic_block).split("(")[0]:
+    #                     for sub_block_name, sub_block in basic_block.named_children():
+    #                         for sub_sub_block_name, sub_sub_block in sub_block.named_children():
+    #                             if "Conv2dNormActivation" == str(sub_sub_block).split("(")[0]:
+    #                                 torch.ao.quantization.fuse_modules_qat(sub_sub_block, [["0","1"]], inplace=True)
 
 
         
         
 
-def train(model, trainloader, optimizer, criterion,scheduler):
+def train(model, trainloader, optimizer, criterion,scheduler,device="cuda"):
+    model.to(device)
     model.train()
     print('Training')
     train_running_loss = 0.0
@@ -95,9 +95,12 @@ def train(model, trainloader, optimizer, criterion,scheduler):
     epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
     return epoch_loss, epoch_acc
 
+@torch.no_grad()
+def validate(model, testloader, criterion,device = "cuda"):
 
-def validate(model, testloader, criterion):
     model.eval()
+    model.to(device)
+    print(device)
     print('Validation')
     valid_running_loss = 0.0
     valid_running_correct = 0
@@ -105,17 +108,20 @@ def validate(model, testloader, criterion):
     with torch.no_grad():
         for i, data in tqdm(enumerate(testloader), total=len(testloader)):
             counter += 1
-            
             image, labels = data
             # image = torch.stack([T(img) for img in image])
+
             image = normalize_pretrained(image)
             image = image.to(device)
             labels = labels.to(device)
-            # Forward pass.
+
             outputs = model(image)
+
             # Calculate the loss.
             loss = criterion(outputs, labels)
+
             valid_running_loss += loss.item()
+
             # Calculate the accuracy.
             _, preds = torch.max(outputs.data, 1)
             valid_running_correct += (preds == labels).sum().item()
@@ -123,7 +129,7 @@ def validate(model, testloader, criterion):
     # Loss and accuracy for the complete epoch.
     epoch_loss = valid_running_loss / counter
     epoch_acc = 100. * (valid_running_correct / len(testloader.dataset))
-    return epoch_loss, epoch_acc
+    return [epoch_loss, epoch_acc]
 
 def get_quantized_model_from_weight(model, weight="best.pt"):
     new_model = copy.deepcopy(model).cpu().eval()
@@ -141,22 +147,37 @@ def main(args):
     ap.add_argument("-u", "--mlflow_url", required=True,help="mlflow url")
     ap.add_argument("-exp", "--exp_name", required=True,help="experiment name")
     ap.add_argument("-lr", "--learning_rate", required=True,help="learning rate",type=float)
+    ap.add_argument("-d", "--device", required=True,help="learning rate",type=int)
     args = ap.parse_args(args)
-    return [args.data+"/train",args.data+"/val",args.output,args.img_sz,args.batch,args.epochs,args.model_name,args.mlflow_url,args.exp_name,args.learning_rate]
+    return [args.data+"/train",args.data+"/val",args.output,args.img_sz,args.batch,args.epochs,args.model_name,args.mlflow_url,args.exp_name,args.learning_rate,args.device]
 
+def load_torchscript_model(model_filepath, device):
+
+    model = torch.jit.load(model_filepath, map_location=device)
+
+    return model
+import os
+def save_torchscript_model(model):
+
+    # if not os.path.exists(model_dir):
+    #     os.makedirs(model_dir)
+    # model_filepath = os.path.join(model_dir, model_filename)
+    torch.jit.save(torch.jit.script(model), "qat_jit.pt")
 
 if __name__ == '__main__':
 
-    train_dir,val_dir,dest,IMAGE_SIZE,BATCH_SIZE,EPOCHS,model_name,MLFLOW_URL,EXP_NAME,lr= main(sys.argv[1:])
+    train_dir,val_dir,dest,IMAGE_SIZE,BATCH_SIZE,EPOCHS,model_name,MLFLOW_URL,EXP_NAME,lr,DEVICE= main(sys.argv[1:])
+    DEVICE = "cuda:"+str(DEVICE)
 
     dataset_train, dataset_valid, dataset_classes = get_datasets(train_dir,val_dir,IMAGE_SIZE,True)
 
     train_loader, valid_loader = get_data_loaders(BATCH_SIZE,2,dataset_train, dataset_valid)
 
-    device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
+    num_classes = len(dataset_classes)
+    # device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
-    model =  QuantizeTrainModel(num_classes=2)
+    model =  QuantizeTrainModel(num_classes=num_classes)
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
     # print(f"{total_params:,} total parameters.")
@@ -173,22 +194,22 @@ if __name__ == '__main__':
     train_acc, valid_acc = [], []
     
     best_accuracy=0.0
-    best_model=model
+    fp32_model=model
 
     mlflow.set_tracking_uri(MLFLOW_URL)
     mlflow.set_experiment(EXP_NAME)
     experiment = mlflow.get_experiment_by_name(EXP_NAME)
 
-
+    model.to(DEVICE)
 
     with mlflow.start_run(experiment_id=experiment.experiment_id,run_name=EXP_NAME):
 
         for epoch in range(EPOCHS):
             epoch_time = time.time()
             # print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-            train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler)
+            train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler,DEVICE)
             #print(exp_lr_scheduler.get_last_lr())
-            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
+            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion,DEVICE)
 
             train_loss.append(train_epoch_loss)
             valid_loss.append(valid_epoch_loss)
@@ -213,43 +234,45 @@ if __name__ == '__main__':
             mlflow.log_metric("validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
             mlflow.pytorch.log_model(model, f"{epoch}")  
 
+        import copy
+        fp32_model = best_model.clone()
+        qat_model = best_model.clone()
+        lr = 0.000001
+        print(type(lr))
+        print(lr)
+
 
         # QAT Prep
+        # qat_model.fused_module_inplace()
 
-        
-        model.fused_module_inplace()
-
-        optimizer = torch.optim.AdamW(model.parameters(),lr=lr,)
+        optimizer = torch.optim.AdamW(qat_model.parameters(),lr=lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=4)
 
-        model.qconfig = torch.ao.quantization.get_default_qat_qconfig("fbgemm")
-        model.train()
-        torch.ao.quantization.prepare_qat(model, inplace=True)
+        qat_model.qconfig = torch.ao.quantization.get_default_qat_qconfig("fbgemm")
+        qat_model.train()
+        torch.ao.quantization.prepare_qat(qat_model, inplace=True)
 
-        model.apply(torch.ao.quantization.enable_observer)
-        model.apply(torch.ao.quantization.enable_fake_quant)
+        qat_model.apply(torch.ao.quantization.enable_observer)
+        qat_model.apply(torch.ao.quantization.enable_fake_quant)
 
-        for epoch in range(EPOCHS):
+        for epoch in range(int(EPOCHS)):
 
             epoch_time = time.time()
             # print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-            train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler)
+            train_epoch_loss, train_epoch_acc = train(qat_model, train_loader, optimizer, criterion,scheduler,DEVICE)
             #print(exp_lr_scheduler.get_last_lr())
-            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
+            valid_epoch_loss, valid_epoch_acc = validate(qat_model, valid_loader,criterion,DEVICE)
 
             train_loss.append(train_epoch_loss)
             valid_loss.append(valid_epoch_loss)
             train_acc.append(train_epoch_acc)
             valid_acc.append(valid_epoch_acc)
 
-            # print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
-            # print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
-            # print('-'*50)
 
             if best_accuracy < valid_epoch_acc:
                 
                 best_accuracy=valid_epoch_acc
-                quantized_model = get_quantized_model_from_weight(model)
+                quantized_model = get_quantized_model_from_weight(qat_model)
                 mlflow.pytorch.log_model(quantized_model, "best")  
 
             # print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
@@ -262,38 +285,39 @@ if __name__ == '__main__':
             quantized_model = get_quantized_model_from_weight(model)
             mlflow.pytorch.log_model(quantized_model, f"{epoch}")  
 
-        model.to("cpu")
+        qat_model.to("cpu")
 
         # Using high-level static quantization wrapper
         # The above steps, including torch.quantization.prepare, calibrate_model, and torch.quantization.convert, are also equivalent to
         # quantized_model = torch.quantization.quantize_qat(model=quantized_model, run_fn=train_model, run_args=[train_loader, test_loader, cuda_device], mapping=None, inplace=False)
-        quantized_model = get_quantized_model_from_weight(model)
+        quantized_model = get_quantized_model_from_weight(qat_model)
 
         quantized_model.eval()
 
         # # Save quantized model.
-        # save_torchscript_model(model=quantized_model, model_dir=model_dir, model_filename=quantized_model_filename)
+        save_torchscript_model(quantized_model)
 
         # # Load quantized model.
-        # quantized_jit_model = load_torchscript_model(model_filepath=quantized_model_filepath, device=cpu_device)
+        quantized_jit_model = load_torchscript_model(model_filepath="qat_jit.pt",device="cpu")
 
-        # _, fp32_eval_accuracy = evaluate_model(model=model, test_loader=test_loader, device=cpu_device, criterion=None)
-        # _, int8_eval_accuracy = evaluate_model(model=quantized_jit_model, test_loader=test_loader, device=cpu_device, criterion=None)
+        _, fp32_eval_accuracy = validate(model, valid_loader , criterion,DEVICE)
+
+        # _, int8_eval_accuracy = validate(quantized_jit_model, valid_loader, criterion,"cpu")
 
         # # Skip this assertion since the values might deviate a lot.
         # # assert model_equivalence(model_1=model, model_2=quantized_jit_model, device=cpu_device, rtol=1e-01, atol=1e-02, num_tests=100, input_size=(1,3,32,32)), "Quantized model deviates from the original model too much!"
 
-        # print("FP32 evaluation accuracy: {:.3f}".format(fp32_eval_accuracy))
+        print("FP32 evaluation accuracy: {:.3f}".format(fp32_eval_accuracy))
         # print("INT8 evaluation accuracy: {:.3f}".format(int8_eval_accuracy))
 
-        # fp32_cpu_inference_latency = measure_inference_latency(model=model, device=cpu_device, input_size=(1,3,32,32), num_samples=100)
-        # int8_cpu_inference_latency = measure_inference_latency(model=quantized_model, device=cpu_device, input_size=(1,3,32,32), num_samples=100)
-        # int8_jit_cpu_inference_latency = measure_inference_latency(model=quantized_jit_model, device=cpu_device, input_size=(1,3,32,32), num_samples=100)
-        # fp32_gpu_inference_latency = measure_inference_latency(model=model, device=cuda_device, input_size=(1,3,32,32), num_samples=100)
+        fp32_cpu_inference_latency = measure_inference_latency(model=fp32_model, device="cpu", input_size=(1,3,224,224), num_samples=100)
+        int8_cpu_inference_latency = measure_inference_latency(model=quantized_model, device="cpu", input_size=(1,3,224,224), num_samples=100)
+        # int8_jit_cpu_inference_latency = measure_inference_latency(model=quantized_jit_model, device="cpu", input_size=(1,3,224,224), num_samples=100)
+        fp32_gpu_inference_latency = measure_inference_latency(model=fp32_model, device=DEVICE, input_size=(1,3,224,224), num_samples=100)
 
-        # print("FP32 CPU Inference Latency: {:.2f} ms / sample".format(fp32_cpu_inference_latency * 1000))
-        # print("FP32 CUDA Inference Latency: {:.2f} ms / sample".format(fp32_gpu_inference_latency * 1000))
-        # print("INT8 CPU Inference Latency: {:.2f} ms / sample".format(int8_cpu_inference_latency * 1000))
+        print("FP32 CPU Inference Latency: {:.2f} ms / sample".format(fp32_cpu_inference_latency * 1000))
+        print("FP32 CUDA Inference Latency: {:.2f} ms / sample".format(fp32_gpu_inference_latency * 1000))
+        print("INT8 CPU Inference Latency: {:.2f} ms / sample".format(int8_cpu_inference_latency * 1000))
         # print("INT8 JIT CPU Inference Latency: {:.2f} ms / sample".format(int8_jit_cpu_inference_latency * 1000))
 
 
@@ -306,3 +330,4 @@ if __name__ == '__main__':
 
 # kaggle
 # https://www.kaggle.com/code/justin900429/quantization-aware-training
+# ! TODO : ONNX support, fuse layers,

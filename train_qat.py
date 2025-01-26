@@ -304,3 +304,4 @@ if __name__ == '__main__':
 
 # kaggle
 # https://www.kaggle.com/code/justin900429/quantization-aware-training
+# https://leimao.github.io/blog/PyTorch-Quantization-Aware-Training/
