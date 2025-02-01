@@ -10,7 +10,16 @@ import copy
 from tqdm.auto import tqdm
 import argparse
 import sys
+from torch.ao.quantization.quantize_pt2e import (
+  prepare_qat_pt2e,
+  convert_pt2e,
+)
+from torch._export import capture_pre_autograd_graph
 
+from torch.ao.quantization.quantizer.xnnpack_quantizer import (
+  XNNPACKQuantizer,
+  get_symmetric_quantization_config,
+)
 
 
 class QuantizeTrainModel(nn.Module):
@@ -65,6 +74,7 @@ class QuantizeTrainModel(nn.Module):
 def train(model, trainloader, optimizer, criterion,scheduler,device="cuda"):
     model.to(device)
     model.train()
+    print('Training')
     train_running_loss = 0.0
     train_running_correct = 0.0
     counter = 0
@@ -99,7 +109,8 @@ def validate(model, testloader, criterion,device = "cuda"):
 
     model.eval()
     model.to(device)
-
+    print(device)
+    print('Validation')
     valid_running_loss = 0.0
     valid_running_correct = 0
     counter = 0
@@ -134,6 +145,17 @@ def get_quantized_model_from_weight(model, weight="best.pt"):
     quantized_model = torch.quantization.convert(new_model, inplace=False)
     return quantized_model
 
+def load_q_model(checkpoint_path):
+    example_inputs = (torch.rand(2, 3, 224, 224),)
+    float_model = build_model(num_classes=2)
+    exported_model = capture_pre_autograd_graph(float_model, example_inputs)
+
+    quantizer = XNNPACKQuantizer()
+    quantizer.set_global(get_symmetric_quantization_config(is_qat=True))
+    prepared_model = prepare_qat_pt2e(exported_model, quantizer)
+    prepared_model.load_state_dict(torch.load(checkpoint_path))
+    return prepared_model
+
 def main(args):
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--data", required=True,help="path to root directory")
@@ -154,24 +176,7 @@ def load_torchscript_model(model_filepath, device):
     model = torch.jit.load(model_filepath, map_location=device)
 
     return model
-
-def save_torchscript_model(model):
-
-    torch.jit.save(torch.jit.script(model), "qat_jit.pt")
-
-def load_q_model(checkpoint_path):
-    example_inputs = (torch.rand(2, 3, 224, 224),)
-    float_model = QuantizeTrainModel(num_classes=2)
-    float_model.qconfig = torch.ao.quantization.get_default_qat_qconfig("fbgemm")
-    torch.ao.quantization.prepare_qat(float_model, inplace=True)
-
-    float_model.apply(torch.ao.quantization.enable_observer)
-    float_model.apply(torch.ao.quantization.enable_fake_quant)
-    float_model = torch.quantization.convert(float_model, inplace=False)
-
-    float_model.load_state_dict(torch.load(checkpoint_path))
-    return float_model
-
+import os
 def save_q_model(model):
 
     # if not os.path.exists(model_dir):
@@ -193,7 +198,11 @@ if __name__ == '__main__':
     # device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
-    model =  QuantizeTrainModel(num_classes=num_classes)
+    model =  build_model(num_classes=num_classes)
+    example_inputs = (torch.randn(1,3,244,244),)
+
+    model = torch.export.export_for_training(model, example_inputs).module()
+
     # Total parameters and trainable parameters.
     total_params = sum(p.numel() for p in model.parameters())
     # print(f"{total_params:,} total parameters.")
@@ -224,7 +233,7 @@ if __name__ == '__main__':
             epoch_time = time.time()
             # print(f"[INFO]: Epoch {epoch+1} of {epochs}")
             train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler,DEVICE)
-            # print(exp_lr_scheduler.get_last_lr())
+            #print(exp_lr_scheduler.get_last_lr())
             valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion,DEVICE)
 
             train_loss.append(train_epoch_loss)
@@ -232,9 +241,9 @@ if __name__ == '__main__':
             train_acc.append(train_epoch_acc)
             valid_acc.append(valid_epoch_acc)
 
-            print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
-            print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
-            print('-'*50)
+            # print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
+            # print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
+            # print('-'*50)
 
             if best_accuracy < valid_epoch_acc:
                 best_model=model
@@ -254,6 +263,9 @@ if __name__ == '__main__':
         fp32_model = best_model.clone()
         qat_model = best_model.clone()
         lr = 0.000001
+        print(type(lr))
+        print(lr)
+
 
         # QAT Prep
         # qat_model.fused_module_inplace()
@@ -261,12 +273,8 @@ if __name__ == '__main__':
         optimizer = torch.optim.AdamW(qat_model.parameters(),lr=lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=4)
 
-        qat_model.qconfig = torch.ao.quantization.get_default_qat_qconfig("fbgemm")
-        qat_model.train()
-        torch.ao.quantization.prepare_qat(qat_model, inplace=True)
-
-        qat_model.apply(torch.ao.quantization.enable_observer)
-        qat_model.apply(torch.ao.quantization.enable_fake_quant)
+        quantizer = XNNPACKQuantizer().set_global(get_symmetric_quantization_config())
+        qat_model = prepare_qat_pt2e(best_model, quantizer)
 
         for epoch in range(int(EPOCHS)):
 
@@ -298,19 +306,11 @@ if __name__ == '__main__':
             quantized_model = get_quantized_model_from_weight(model)
             mlflow.pytorch.log_model(quantized_model, f"{epoch}")  
 
-        qat_model.to("cpu")
+        qat_model = convert_pt2e(qat_model)
 
-        # Using high-level static quantization wrapper
-        # The above steps, including torch.quantization.prepare, calibrate_model, and torch.quantization.convert, are also equivalent to
-        # quantized_model = torch.quantization.quantize_qat(model=quantized_model, run_fn=train_model, run_args=[train_loader, test_loader, cuda_device], mapping=None, inplace=False)
-        quantized_model = get_quantized_model_from_weight(qat_model)
-
-        quantized_model.eval()
 
         # # Save quantized model.
-        # save_torchscript_model(quantized_model)
         save_q_model(quantized_model)
-
 
         # # Load quantized model.
         quantized_jit_model = load_q_model("qat_jit.pt")
@@ -323,7 +323,7 @@ if __name__ == '__main__':
         # # assert model_equivalence(model_1=model, model_2=quantized_jit_model, device=cpu_device, rtol=1e-01, atol=1e-02, num_tests=100, input_size=(1,3,32,32)), "Quantized model deviates from the original model too much!"
 
         print("FP32 evaluation accuracy: {:.3f}".format(fp32_eval_accuracy))
-        print("INT8 evaluation accuracy: {:.3f}".format(int8_eval_accuracy))
+        # print("INT8 evaluation accuracy: {:.3f}".format(int8_eval_accuracy))
 
         fp32_cpu_inference_latency = measure_inference_latency(model=fp32_model, device="cpu", input_size=(1,3,224,224), num_samples=100)
         int8_cpu_inference_latency = measure_inference_latency(model=quantized_model, device="cpu", input_size=(1,3,224,224), num_samples=100)

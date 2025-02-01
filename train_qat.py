@@ -270,7 +270,7 @@ if __name__ == '__main__':
         quantized_model.eval()
 
         # # Save quantized model.
-        # save_torchscript_model(model=quantized_model, model_dir=model_dir, model_filename=quantized_model_filename)
+        save_torchscript_model(model=quantized_model, model_dir="./", model_filename="quantized_model_filename.pt")
 
         # # Load quantized model.
         # quantized_jit_model = load_torchscript_model(model_filepath=quantized_model_filepath, device=cpu_device)

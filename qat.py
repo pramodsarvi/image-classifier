@@ -34,10 +34,8 @@ def measure_inference_latency(model,
                               input_size=(1, 3, 32, 32),
                               num_samples=100,
                               num_warmups=10):
-    print("here1")
     model.to(device)
     model.eval()
-    print("here2")
 
     x = torch.rand(size=input_size).to(device)
     # x = torch.quantize_per_tensor(x, scale=1.0, zero_point=0, dtype=torch.quint8)
@@ -48,7 +46,6 @@ def measure_inference_latency(model,
         for _ in range(num_warmups):
             _ = model(x)
     torch.cuda.synchronize()
-    print("here4")
 
     with torch.no_grad():
         start_time = time.time()
