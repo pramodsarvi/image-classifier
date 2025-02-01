@@ -40,8 +40,6 @@ def measure_inference_latency(model,
     x = torch.rand(size=input_size).to(device)
     # x = torch.quantize_per_tensor(x, scale=1.0, zero_point=0, dtype=torch.quint8)
 
-    print(type(x))
-
     with torch.no_grad():
         for _ in range(num_warmups):
             _ = model(x)

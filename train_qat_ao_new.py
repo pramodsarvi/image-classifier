@@ -263,9 +263,6 @@ if __name__ == '__main__':
         fp32_model = best_model.clone()
         qat_model = best_model.clone()
         lr = 0.000001
-        print(type(lr))
-        print(lr)
-
 
         # QAT Prep
         # qat_model.fused_module_inplace()
