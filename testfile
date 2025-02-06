@@ -1,0 +1,6 @@
+torch==2.6.0
+torchaudio==2.6.0
+torchsampler==0.1.2
+torchvision==0.21.0
+tqdm==4.67.1
+mlflow
