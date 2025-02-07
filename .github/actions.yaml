@@ -4,7 +4,14 @@ on:
   branches: new
  pull_request:
   branches: new
- 
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+
 jobs:
    build: 
       runs-on: ubuntu-latest
@@ -28,4 +35,29 @@ jobs:
               file: ./Dockerfile
               platforms: linux/amd64,linux/arm64
               push: true
-              tags: ${{ secrets.DOCKER_USERNAME }}/myapp:latest 
+              tags: ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest 
+              labels: ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
+
+    Deploy-dev:
+       needs: build
+       runs-on: self-hosted
+        steps:
+          - name: docker pull
+            run: docker pull ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
+          - name: docker run
+            run: docker run -d -p 5000:5000 ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
+
+    Deploy-prod:
+       needs: Deploy-dev
+       runs-on: ubuntu22.04
+        steps:
+          - name: deploy to aws gpu instance
+            run: ssh -i ${{ secrets.SSH_KEY }} ubuntu@${{ secrets.AWS_PUBLIC_IP }} 'bash -s' < deploy.sh
+          -`name: install nvidia-driver`
+            run: sudo apt-get install nvidia-driver-550
+          -name: install nvidia-container-toolkit`
+            run: sudo apt-get install nvidia-container-toolkit
+          - name: docker pull
+            run: docker pull ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
+          - name: docker run
+            run: docker run -d -p 5000:5000 ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
