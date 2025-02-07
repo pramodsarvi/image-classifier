@@ -49,17 +49,18 @@ jobs:
         run: docker rm -f train_qat_ao || true
 
       - name: Run Docker Container
-        run: docker run -d --name train_qat_ao -p 5000:5000 ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
+        run: docker run -d --name train_qat_ao --runtime=nvidia --gpus=all -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
 
   Deploy-prod:
     needs: Deploy-dev
     runs-on: ubuntu-22.04
     steps:
       - name: Deploy to AWS GPU Instance
-        run: ssh -o StrictHostKeyChecking=no -i ${{ secrets.SSH_KEY }} ubuntu@${{ secrets.AWS_PUBLIC_IP }} << 'EOF'
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ${{ secrets.SSH_KEY }} ubuntu@${{ secrets.AWS_PUBLIC_IP }} << 'EOF'
           sudo apt-get update
           sudo apt-get install -y nvidia-driver-550 nvidia-container-toolkit
           docker pull ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
           docker rm -f train_qat_ao || true
           docker run -d --name train_qat_ao -p 5000:5000 --gpus all ${{ secrets.DOCKER_USERNAME }}/train_qat_ao:latest
-        EOF
+          EOF
