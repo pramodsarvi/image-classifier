@@ -1,6 +1,5 @@
 # Use NVIDIA PyTorch container as the base image
-FROM nvcr.io/nvidia/pytorch:24.07-py3
-
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
 # Set up the working directory
 WORKDIR /workspace
 
