@@ -86,7 +86,7 @@ jobs:
       - name: Run Docker Container
         run: |
           docker run -d --name train_qat_ao \
-            --runtime=nvidia --gpus=all --ipc host -v /home/iwizards/Documents/nikhil/archive:/archive \
+            --runtime=nvidia --gpus=all --ipc host -v home/pramod/Documents/archive:/archive \
             -p 8080:8080 \
             ${{ needs.build.outputs.image }} --entrypoint /bin/bash -c "while true; do sleep 30; done"
 
