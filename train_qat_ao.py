@@ -11,6 +11,9 @@ import copy
 from tqdm.auto import tqdm
 import argparse
 import sys
+import onnx
+from to_onnx import convert_onnx
+
 
 
 
@@ -236,6 +239,8 @@ if __name__ == '__main__':
                 best_model=model
                 best_accuracy=valid_epoch_acc
                 mlflow.pytorch.log_model(model, "best")  
+                convert_onnx(model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
+                mlflow.onnx.log_model(onnx.load_model("model.onnx"),"model_onnx_best") 
 
 
             mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
@@ -244,6 +249,9 @@ if __name__ == '__main__':
             mlflow.log_metric("validation loss", f"{valid_epoch_loss:3f}", step=epoch)
             mlflow.log_metric("validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
             mlflow.pytorch.log_model(model, f"{epoch}")  
+            convert_onnx(model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
+            mlflow.onnx.log_model(onnx.load_model("model.onnx"),f"model_onnx_{epoch}") 
+
             print('estimated time of completion:',(time.time()-epoch_time)*(EPOCHS-epoch-1)/3600,' hrs ')
 
         import copy

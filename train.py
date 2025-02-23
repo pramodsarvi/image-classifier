@@ -8,6 +8,7 @@ import time
 from tqdm.auto import tqdm
 import argparse
 import sys
+from to_onnx import * 
 
 
 def train(model, trainloader, optimizer, criterion,scheduler):
@@ -76,15 +77,17 @@ def main(args):
     ap = argparse.ArgumentParser()
     ap.add_argument("-i", "--data", required=True,help="path to root directory")
     ap.add_argument("-o", "--output", required=True,help="path to output image")
-    ap.add_argument("-sz", "--img_sz", required=True,help="image size")
-    ap.add_argument("-b", "--batch", required=True,help="batch size")
-    ap.add_argument("-e", "--epochs", required=True,help="epochs")
-    ap.add_argument("-mn", "--model_name", required=True,help="model name")
+    ap.add_argument("-sz", "--img_sz", required=True,help="image size",type = int)
+    ap.add_argument("-b", "--batch", required=True,help="batch size",type=int)
+    ap.add_argument("-e", "--epochs", required=True,help="epochs",type=int)
+    ap.add_argument("-mn", "--model-name", required=True,help="model name")
     ap.add_argument("-u", "--mlflow_url", required=True,help="mlflow url")
     ap.add_argument("-exp", "--exp_name", required=True,help="experiment name")
-    ap.add_argument("-lr", "--learning_rate", required=True,help="learning rate")
+    ap.add_argument("-lr", "--learning_rate", required=True,help="learning rate",type=float)
+    ap.add_argument("-d", "--device", required=True,help="GPU Device",type=int)
+    ap.add_argument("-v", "--version", required=True,help="model version",type=int)
     args = ap.parse_args(args)
-    return [args.data+"/train",args.data+"/val",args.output,args.img_sz,args.batch,args.epochs,args.model_name,args.mlflow_url,args.exp_name,args.learning_rate]
+    return [args.data+"/train",args.data+"/val",args.output,args.img_sz,int(args.batch),args.epochs,args.model_name,args.mlflow_url,args.exp_name,args.learning_rate]
 
 
 
@@ -162,5 +165,8 @@ if __name__ == '__main__':
             mlflow.log_metric("validation loss", f"{valid_epoch_loss:3f}", step=epoch)
             mlflow.log_metric("validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
             mlflow.pytorch.log_model(model, f"{epoch}")  
+            convert_onnx(model,(224,224),"cuda","onnx")
+
+
 
     print('TRAINING COMPLETE')

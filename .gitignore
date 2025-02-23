@@ -5,3 +5,4 @@ mlartifact/
 mlruns/
 mlartifacts/
 *.pt
+*.onnx
