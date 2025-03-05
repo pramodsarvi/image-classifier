@@ -1,0 +1,17 @@
+name: "classifier"
+platform: "onnxruntime_onnx"
+max_batch_size: 0
+input [
+{
+  name: "actual_input"
+  data_type: TYPE_FP32
+  dims: [ 1,3,224,224 ]
+}
+]
+output [
+{
+  name: "output"
+  data_type: TYPE_FP32
+  dims: [-1, 2]
+}
+]

@@ -1,171 +1,172 @@
-import time
-from torch.optim import lr_scheduler
 import torch
 from config import *
 from transforms import *
-from datasets import *
-from build_model import *
-
-from save import *
-from utils import *
-# os.environ["CUDA_VISIBLE_DEVICES"] = webface_r50  
-from datasets import *
-from qat import quantized_model
-
+from model import *
+from data import *
 import mlflow
+import time
+from tqdm.auto import tqdm
+import argparse
+import sys
+from to_onnx import * 
 
-# from torch.utils.tensorboard import SummaryWriter
 
-# # default `log_dir` is "runs" - we'll be more specific here
-# writer = SummaryWriter('runs/fashion_mnist_experiment_1')
+def train(model, trainloader, optimizer, criterion,scheduler):
+    model.train()
+    print('Training')
+    train_running_loss = 0.0
+    train_running_correct = 0.0
+    counter = 0
+    for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
+        counter += 1
+        image, labels = data
+        image = torch.stack([T(img) for img in image])
+        image = normalize_pretrained(image)
+        image = image.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad()
+        # Forward pass.
+        outputs = model(image)
+        # Calculate the loss.
+        loss = criterion(outputs, labels)
+        train_running_loss += loss.item()
+        # Calculate the accuracy.
+        _, preds = torch.max(outputs.data, 1)
+        train_running_correct += (preds == labels).sum().item()
+        # Backpropagation
+        loss.backward()
+        # Update the weights.
+        optimizer.step()
+        scheduler.step()
+    # Loss and accuracy for the complete epoch.
+    epoch_loss = train_running_loss / counter
+    epoch_acc = 100. * (train_running_correct / len(trainloader.dataset))
+    return epoch_loss, epoch_acc
 
-class trainer():
 
-    def __init__(self,model,epochs,gpu,root,save_path,batch_size,train_test_split,input_dims,lr,qat):
-        self.model = model
-        self.epochs = epochs
-        self.gpu = gpu
-        self.root = root
-        self.save_path = save_path
-        self.batch_size = batch_size
-        self.train_test_split = train_test_split
-        self.input_dims = input_dims
-        self.lr = lr
-        self.qat = qat
+def validate(model, testloader, criterion):
+    model.eval()
+    print('Validation')
+    valid_running_loss = 0.0
+    valid_running_correct = 0
+    counter = 0
+    with torch.no_grad():
+        for i, data in tqdm(enumerate(testloader), total=len(testloader)):
+            counter += 1
+            
+            image, labels = data
+            # image = torch.stack([T(img) for img in image])
+            image = normalize_pretrained(image)
+            image = image.to(device)
+            labels = labels.to(device)
+            # Forward pass.
+            outputs = model(image)
+            # Calculate the loss.
+            loss = criterion(outputs, labels)
+            valid_running_loss += loss.item()
+            # Calculate the accuracy.
+            _, preds = torch.max(outputs.data, 1)
+            valid_running_correct += (preds == labels).sum().item()
+        
+    # Loss and accuracy for the complete epoch.
+    epoch_loss = valid_running_loss / counter
+    epoch_acc = 100. * (valid_running_correct / len(testloader.dataset))
+    return epoch_loss, epoch_acc
+
+def main(args):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-i", "--data", required=True,help="path to root directory")
+    ap.add_argument("-o", "--output", required=True,help="path to output image")
+    ap.add_argument("-sz", "--img_sz", required=True,help="image size",type = int)
+    ap.add_argument("-b", "--batch", required=True,help="batch size",type=int)
+    ap.add_argument("-e", "--epochs", required=True,help="epochs",type=int)
+    ap.add_argument("-mn", "--model-name", required=True,help="model name")
+    ap.add_argument("-u", "--mlflow_url", required=True,help="mlflow url")
+    ap.add_argument("-exp", "--exp_name", required=True,help="experiment name")
+    ap.add_argument("-lr", "--learning_rate", required=True,help="learning rate",type=float)
+    ap.add_argument("-d", "--device", required=True,help="GPU Device",type=int)
+    ap.add_argument("-v", "--version", required=True,help="model version",type=int)
+    args = ap.parse_args(args)
+    return [args.data+"/train",args.data+"/val",args.output,args.img_sz,int(args.batch),args.epochs,args.model_name,args.mlflow_url,args.exp_name,args.learning_rate]
+
+
+
+
+if __name__ == '__main__':
+
+    train_dir,val_dir,dest,IMAGE_SIZE,BATCH_SIZE,EPOCHS,model_name,MLFLOW_URL,EXP_NAME,lr= main(sys.argv[1:])
+
+
+    dataset_train, dataset_valid, dataset_classes = get_datasets(train_dir,val_dir,IMAGE_SIZE,True)
+
+    train_loader, valid_loader = get_data_loaders(BATCH_SIZE,2,dataset_train, dataset_valid)
+
     
-    def train(self):
-        pass
-
-    def train_qat(self):
-        pass
-
-    def trainfp16(self):
-        pass
-    def evaluate(self):
-        pass
-
-    def benchmark(self):
-        pass
-
-    def save_models(self):
-        pass
-
-    def log_mlflow_stats(self):
-        pass
+    device = ('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
+    model = build_model(
+        pretrained=True, 
+        fine_tune=True, 
+        num_classes=len(dataset_classes)
+    ).to(device)
+    
+    # Total parameters and trainable parameters.
+    total_params = sum(p.numel() for p in model.parameters())
+    # print(f"{total_params:,} total parameters.")
+    total_trainable_params = sum(
+        p.numel() for p in model.parameters() if p.requires_grad)
+    # print(f"{total_trainable_params:,} training parameters.")
 
-def start_training(model,epochs,train_loader,valid_loader,optimizer,criterion):
+    # Optimizer.
+    optimizer = torch.optim.AdamW(model.parameters(),lr=lr,)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=4)
+    
+    criterion = torch.nn.CrossEntropyLoss()
     train_loss, valid_loss = [], []
     train_acc, valid_acc = [], []
-    # Start the training.
     
     best_accuracy=0.0
     best_model=model
-    for epoch in range(epochs):
-        epoch_time = time.time()
-        print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-        train_epoch_loss, train_epoch_acc = amp_util_train(model, train_loader,criterion,optimizer)
-        #print(exp_lr_scheduler.get_last_lr())
-        valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
-        # exp_lr_scheduler.step()
-        train_loss.append(train_epoch_loss)
-        valid_loss.append(valid_epoch_loss)
-        train_acc.append(train_epoch_acc)
-        valid_acc.append(valid_epoch_acc)
-        print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
-        print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
-        print('-'*50)
-        # time.sleep(5)
-        if valid_epoch_acc>best_accuracy:
-            best_model=model
-            best_accuracy=valid_epoch_acc
-            save_model(epoch, model, criterion,is_best=True)
-        save_model(epoch, model, criterion, False)
-        save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
-        print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
+
+    mlflow.set_tracking_uri(MLFLOW_URL)
+    mlflow.set_experiment(EXP_NAME)
+    experiment = mlflow.get_experiment_by_name(EXP_NAME)
 
 
-        mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
-        mlflow.log_metric("training accuracy", f"{train_epoch_acc:3f}", step=epoch)
-    # Save the trained model weights.
-    save_model(epochs, model, criterion, True)
-    # Save the loss and accuracy plots.
-    # torch.save(model,'/home/shalom/classifier/uniform_classifier/results/uniform_clsfr_efficientnet_pytorch_may6.pt')
-    save_plots(train_acc, valid_acc, train_loss, valid_loss, True)
+
+    with mlflow.start_run(experiment_id=experiment.experiment_id,run_name=EXP_NAME):
+
+        for epoch in range(EPOCHS):
+            epoch_time = time.time()
+            # print(f"[INFO]: Epoch {epoch+1} of {epochs}")
+            train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler)
+            #print(exp_lr_scheduler.get_last_lr())
+            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion)
+
+            train_loss.append(train_epoch_loss)
+            valid_loss.append(valid_epoch_loss)
+            train_acc.append(train_epoch_acc)
+            valid_acc.append(valid_epoch_acc)
+            # print(f"Training loss: {train_epoch_loss:.3f}, training acc: {train_epoch_acc:.3f}")
+            # print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc: {valid_epoch_acc:.3f}")
+            # print('-'*50)
+
+            if best_accuracy < valid_epoch_acc:
+                best_model=model
+                best_accuracy=valid_epoch_acc
+                mlflow.pytorch.log_model(model, "best")  
+
+            # print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
+
+            mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
+            mlflow.log_metric("training accuracy", f"{train_epoch_acc:3f}", step=epoch)
+
+            mlflow.log_metric("validation loss", f"{valid_epoch_loss:3f}", step=epoch)
+            mlflow.log_metric("validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
+            mlflow.pytorch.log_model(model, f"{epoch}")  
+            convert_onnx(model,(224,224),"cuda","onnx")
+
+
+
     print('TRAINING COMPLETE')
-
-def main():
-    
-    # Load the training and validation datasets.
-    dataset_train, dataset_valid, dataset_classes = get_datasets(True)
-    print(f"[INFO]: Number of training images: {len(dataset_train)}")
-    print(f"[INFO]: Number of validation images: {len(dataset_valid)}")
-    print(f"[INFO]: Class names: {dataset_classes}\n")
-    # Load the training and validation data loaders.
-    train_loader, valid_loader = get_data_loaders(dataset_train, dataset_valid)
-    
-    # Learning_parameters. 
-    lr = 0.001
-    epochs = EPOCHS
-    DEVICE = ('cuda:0' if torch.cuda.is_available() else 'cpu')
-    print(f"Computation DEVICE: {DEVICE}")
-    print(f"Learning rate: {lr}")
-    print(f"Epochs to train for: {epochs}\n")
-
-    model = build_model(pretrained=True,fine_tune=True,num_classes=len(dataset_classes)).to(DEVICE)
-    
-    if QAT:
-        model = quantized_model(model).to(DEVICE)
-        quantization_config = torch.quantization.get_default_qconfig("fbgemm")
-        model.qconfig = quantization_config
-        torch.quantization.prepare_qat(model, inplace=True)
-
-    
-    
-    # Total parameters and trainable parameters.
-    total_params = sum(p.squeeze().numel() for p in model.parameters())
-    print(f"{total_params:,} total parameters.")
-    total_trainable_params = sum(
-        p.squeeze().numel() for p in model.parameters() if p.requires_grad)
-    print(f"{total_trainable_params:,} training parameters.")
-
-    # Optimizer.
-    optimizer = torch.optim.AdamW(model.parameters(),lr=lr)
-    # Loss function.
-    criterion = torch.nn.CrossEntropyLoss()
-    # exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=70,gamma=0.01)
-    # Lists to keep track of losses and accuracies.
-    
-
-
-    mlflow.set_tracking_uri("http://localhost:8080")
-    mlflow.set_experiment("test2")
-
-    model_name = "model_name_v3"
-    # with mlflow.start_run(run_name=model_name):
-
-    # mlflow.set_experiment("experiment name")
-    experiment = mlflow.get_experiment_by_name("test")
-
-    with mlflow.start_run(experiment_id=experiment.experiment_id,run_name=model_name):
-
-        start_training(model=model,epochs=epochs,train_loader=train_loader,valid_loader=valid_loader,optimizer=optimizer,criterion=criterion)
-        mlflow.log_param("model", model_name)
-        mlflow.log_metric('accuracy', 90)
-        mlflow.log_metric('recall_class_1', 90)
-        mlflow.log_metric('recall_class_0', 90)
-        mlflow.log_metric('f1_score_macro', 90)        
-        
-        # if "XGB" in model_name:
-        #     mlflow.xgboost.log_model(model, "model")
-        # else:
-        # mlflow.log_figure(fig1, "time_series_demand.png")
-        mlflow.pytorch.log_model(model, "model")  
-
-        
-
-
-
-if __name__ == "__main__":
-    main()
