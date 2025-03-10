@@ -102,6 +102,7 @@ def convert_onnx(model,size: tuple,device,onnx_name):
 
 
     apply(change_input_dim, f"{onnx_name}.onnx",f"{onnx_name}.onnx")
+
     with torch.no_grad():
         ort = onnxruntime.InferenceSession(f"{onnx_name}.onnx")
         ort_inp = {ort.get_inputs()[0].name:to_numpy(image_tensor)}

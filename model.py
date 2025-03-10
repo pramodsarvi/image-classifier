@@ -118,7 +118,7 @@ class MobileNetV2(nn.Module):
         self.features = nn.Sequential(*features)
         # building classifier
         self.classifier = nn.Sequential(
-            nn.Dropout(0.2),
+            nn.Dropout(0.3),
             nn.Linear(self.last_channel, num_classes),
         )
 
@@ -138,6 +138,7 @@ class MobileNetV2(nn.Module):
     def forward(self, x):
         x = self.features(x)
         x = x.mean([2, 3])
+
         x = self.classifier(x)
         return x
 
@@ -162,10 +163,10 @@ def build_model(pretrained=True, fine_tune=True, num_classes=3):
     else:
         print('[INFO]: Not loading pre-trained weights')
 
-    model = MobileNetV2()
-    model.load_state_dict(torch.load("original_model.pt"))
+    # model = MobileNetV2()
+    # model.load_state_dict(torch.load("original_model.pt"))
 
-    # model = models.efficientnet_b0(pretrained=True)
+    model = models.efficientnet_b0(pretrained=True)
     if fine_tune:
         print('[INFO]: Fine-tuning all layers...')
         for params in model.parameters():
@@ -176,7 +177,7 @@ def build_model(pretrained=True, fine_tune=True, num_classes=3):
         for params in model.parameters():
             params.requires_grad = False
         
-    model.classifier[1] =nn.Sequential(nn.Linear(1280,512),nn.Linear(in_features=512, out_features=num_classes))
+    model.classifier[1] =nn.Sequential(nn.Linear(1280,512),nn.Dropout(0.3),nn.Linear(in_features=512, out_features=num_classes))
     
     return model
 # print(build_model())

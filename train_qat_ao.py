@@ -18,16 +18,15 @@ from to_onnx import convert_onnx
 
 
 class QuantizeTrainModel(nn.Module):
-    def __init__(self, pretrained=True, num_classes=2):
+    def __init__(self, model):
         super().__init__()
         
         # Model settings
-        self.pretrained=pretrained
         self.num_classes = num_classes
         
         # Floating point -> Integer for input
         self.quant = torch.ao.quantization.QuantStub()
-        self.model = build_model(num_classes=num_classes)
+        self.model = model
 
         # Integer to Floating point for output
         self.dequant = torch.ao.quantization.DeQuantStub()
@@ -38,7 +37,7 @@ class QuantizeTrainModel(nn.Module):
         return self.dequant(x)
 
     def clone(self):
-        clone = QuantizeTrainModel(self.pretrained, self.num_classes)
+        clone = QuantizeTrainModel(self.model)
         clone.load_state_dict(self.state_dict())
         clone.to("cpu")
         return clone
@@ -166,7 +165,7 @@ def save_torchscript_model(model,model_name):
 
 def load_q_model(checkpoint_path):
     example_inputs = (torch.rand(2, 3, 224, 224),)
-    float_model = QuantizeTrainModel(num_classes=2)
+    float_model = QuantizeTrainModel(build_model(num_classes=2))
     float_model.qconfig = torch.ao.quantization.get_default_qat_qconfig("fbgemm")
     torch.ao.quantization.prepare_qat(float_model, inplace=True)
 
@@ -192,17 +191,17 @@ if __name__ == '__main__':
 
     num_classes = len(dataset_classes)
     client = MlflowClient()
-    model =  QuantizeTrainModel(num_classes=num_classes)
+    fp32_model = build_model(num_classes=num_classes)
 
     # Total parameters and trainable parameters.
-    total_params = sum(p.numel() for p in model.parameters())
+    total_params = sum(p.numel() for p in fp32_model.parameters())
     # print(f"{total_params:,} total parameters.")
     total_trainable_params = sum(
-        p.numel() for p in model.parameters() if p.requires_grad)
+        p.numel() for p in fp32_model.parameters() if p.requires_grad)
     # print(f"{total_trainable_params:,} training parameters.")
 
     # Optimizer.
-    optimizer = torch.optim.AdamW(model.parameters(),lr=lr,)
+    optimizer = torch.optim.AdamW(fp32_model.parameters(),lr=lr,)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=4)
     
     criterion = torch.nn.CrossEntropyLoss()
@@ -210,21 +209,20 @@ if __name__ == '__main__':
     train_acc, valid_acc = [], []
     
     best_accuracy=0.0
-    fp32_model=model
 
     mlflow.set_tracking_uri(MLFLOW_URL)
     mlflow.set_experiment(EXP_NAME)
     experiment = mlflow.get_experiment_by_name(EXP_NAME)
 
-    model.to(DEVICE)
+    fp32_model.to(DEVICE)
 
     with mlflow.start_run(experiment_id=experiment.experiment_id,run_name=EXP_NAME):
 
         for epoch in range(EPOCHS):
 
             epoch_time = time.time()
-            train_epoch_loss, train_epoch_acc = train(model, train_loader, optimizer, criterion,scheduler,DEVICE)
-            valid_epoch_loss, valid_epoch_acc = validate(model, valid_loader,criterion,DEVICE)
+            train_epoch_loss, train_epoch_acc = train(fp32_model, train_loader, optimizer, criterion,scheduler,DEVICE)
+            valid_epoch_loss, valid_epoch_acc = validate(fp32_model, valid_loader,criterion,DEVICE)
 
             train_loss.append(train_epoch_loss)
             valid_loss.append(valid_epoch_loss)
@@ -236,11 +234,14 @@ if __name__ == '__main__':
             print('-'*50)
 
             if best_accuracy < valid_epoch_acc:
-                best_model=model
+                best_model=fp32_model
                 best_accuracy=valid_epoch_acc
-                mlflow.pytorch.log_model(model, "best")  
-                convert_onnx(model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
-                mlflow.onnx.log_model(onnx.load_model("model.onnx"),"model_onnx_best") 
+                mlflow.pytorch.log_model(fp32_model, "best")  
+                convert_onnx(best_model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
+                import time
+                time.sleep(5)
+                # mlflow.onnx.log_model("model.onnx","model_onnx_best",save_as_external_data=True) 
+                mlflow.onnx.log_model(onnx.load_model("model.onnx").SerializeToString(),"model_onnx_best",save_as_external_data=True) 
 
 
             mlflow.log_metric("training loss", f"{train_epoch_loss:3f}", step=epoch)
@@ -248,15 +249,15 @@ if __name__ == '__main__':
 
             mlflow.log_metric("validation loss", f"{valid_epoch_loss:3f}", step=epoch)
             mlflow.log_metric("validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
-            mlflow.pytorch.log_model(model, f"{epoch}")  
-            convert_onnx(model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
-            mlflow.onnx.log_model(onnx.load_model("model.onnx"),f"model_onnx_{epoch}") 
+            # mlflow.pytorch.log_model(fp32_model, f"{epoch}",save_as_external_data=True)  
+            # convert_onnx(fp32_model,(IMAGE_SIZE,IMAGE_SIZE),DEVICE,"model")
+            # mlflow.onnx.log_model(onnx.load_model("model.onnx"),f"model_onnx_{epoch}") 
 
             print('estimated time of completion:',(time.time()-epoch_time)*(EPOCHS-epoch-1)/3600,' hrs ')
 
         import copy
-        fp32_model = best_model.clone()
-        qat_model = best_model.clone()
+        
+        qat_model = QuantizeTrainModel(best_model)
         lr = 0.000001
 
 
@@ -284,11 +285,11 @@ if __name__ == '__main__':
             valid_acc.append(valid_epoch_acc)
 
 
-            if best_accuracy < valid_epoch_acc:
+            if best_accuracy > valid_epoch_acc:
                 
                 best_accuracy=valid_epoch_acc
                 quantized_model = get_quantized_model_from_weight(qat_model)
-                mlflow.pytorch.log_model(quantized_model, "best")  
+                # mlflow.pytorch.log_model(quantized_model, "best")  
 
             try:
                client.create_registered_model(model_name)
@@ -301,7 +302,7 @@ if __name__ == '__main__':
                 run_id=mlflow.active_run().info.run_id,
             )
     
-            print(f"Registered Model: {model_name}, Version: {model_version.version}")
+            print(f"l: {model_name}, Version: {model_version.version}")
 
 
             # print('estimated time of completion:',(time.time()-epoch_time)*(epochs-epoch-1)/3600,' hrs ')
@@ -311,8 +312,8 @@ if __name__ == '__main__':
 
             mlflow.log_metric("QAT validation loss", f"{valid_epoch_loss:3f}", step=epoch)
             mlflow.log_metric("QAT validation accuracy", f"{valid_epoch_acc:3f}", step=epoch)
-            quantized_model = get_quantized_model_from_weight(model)
-            mlflow.pytorch.log_model(quantized_model, f"{epoch}")  
+            quantized_model = get_quantized_model_from_weight(qat_model)
+            # mlflow.pytorch.log_model(quantized_model, f"{epoch}")  
 
         qat_model.to("cpu")
         
@@ -327,7 +328,7 @@ if __name__ == '__main__':
         # # Load quantized model.
         quantized_jit_model = load_q_model(model_name+"_q.pt")
 
-        _, fp32_eval_accuracy = validate(model, valid_loader , criterion,DEVICE)
+        _, fp32_eval_accuracy = validate(fp32_model, valid_loader , criterion,DEVICE)
 
         _, int8_eval_accuracy = validate(quantized_jit_model, valid_loader, criterion,"cpu")
 

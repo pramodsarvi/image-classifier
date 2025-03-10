@@ -1,14 +1,7 @@
 import cv2
 import numpy as np
 import tritonclient.http as httpclient
-
-
-
-
-
-
-
-
+import torch
 from flask import Flask, request, jsonify
 import os
 
@@ -16,10 +9,15 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+class_dict = {
+    0:"dog",
+    1:"cat"
+}
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     url = 'localhost:8000'
-    model_name = 'classifier'
+    model_name = 'triton_test_model_1'
     model_version = ""
     triton_client = httpclient.InferenceServerClient(url=url)
 
@@ -37,11 +35,6 @@ def upload_file():
     # Read the image using OpenCV from disk
     image = cv2.imread(file_path)
 
-
-
-    
-    # image = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
-
     resized_image = cv2.resize(image, (224, 224))
 
     rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB) / 255.0
@@ -56,16 +49,14 @@ def upload_file():
     print("inputs[0]:::::",inputs[0])
 
     response = triton_client.infer(model_name=model_name,
-                                inputs=inputs,
-                                model_version=model_version)
-
-
+                                inputs=inputs)
+                                # model_version=model_version)
 
     output = response.as_numpy('output')  # Replace with actual output
-    print(output)
+    o = torch.nn.functional.softmax(torch.from_numpy(output))
     
     
-    return jsonify({'message': 'File uploaded successfully', 'file_path': file_path,})
+    return jsonify({'message': 'File uploaded successfully', 'class': class_dict[torch.argmax(o[0]).item()]})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
