@@ -5,6 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 import mlflow
+import onnx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -16,11 +17,11 @@ class ModelConfig:
         self.platform = "onnxruntime_onnx"
         self.max_batch_size = 32
         self.input_dtype = "TYPE_FP32"
-        self.input_dims = [1,3, 224, 224]        
+        self.input_dims = [3, 224, 224]        
         self.output_dtype = "TYPE_FP32"
-        self.output_dims = [-1,2]
+        self.output_dims = [2]
 
-def download_mlflow_model(mlflow_url: str, model_name: str, model_version: int, output_path: str,runs_id: str,model: str) -> str:
+def download_mlflow_model(mlflow_url: str, model_name: str, model_version: int, output_path: str) -> str:
     """Downloads an MLflow model for Triton deployment."""
     try:
         output_dir = Path(output_path)
@@ -31,47 +32,53 @@ def download_mlflow_model(mlflow_url: str, model_name: str, model_version: int, 
         mlflow.set_tracking_uri(mlflow_url)
 
         # model_uri = f"models:/{model_name}/{model_version}"
-        #  = Path(mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=output_path))
+        # model_download_path = Path(mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=output_path))
 
-        model_uri = f'runs:/{runs_id}/{model}'  # Change this to your MLflow model path
-        onnx_model = mlflow.onnx.load_model(model_uri)
-        import onnx 
-        # Save ONNX model as a standalone file (optional)
-        
-        onnx.save(onnx_model, os.path.join(output_path , "model.onnx"))
+        model_uri = f"models:/{model_name}/{model_version}"  # Fetch latest version of the model
+        # or
+        # model_uri = "runs:/your_run_id/model"
+
+        # Load the model
+        onnx_model_path = mlflow.onnx.load_model(model_uri)
+
+        # Save the model locally as "model.onnx"
+        model_download_path = os.path.join(output_path , "model.onnx")
+        print(output_path)
+        print(model_download_path)
+        onnx.save(onnx_model_path, model_download_path)
+        print("onnx saved")
 
         model_dir = output_dir / model_name
         version_dir = model_dir / str(model_version)
         version_dir.mkdir(parents=True, exist_ok=True)
 
-        source_model_path = Path(os.path.join(output_path , "model.onnx"))
-        dest_model_path = Path(os.path.join(version_dir , "model.onnx"))
+        source_model_path = os.path.join(output_path  , "model.onnx")
+        dest_model_path = os.path.join(version_dir , "model.onnx")
 
-        if source_model_path.exists():
+        if os.path.exists(source_model_path):
             shutil.copy(source_model_path, dest_model_path)
         else:
             raise FileNotFoundError(f"Model file not found: {source_model_path}")
 
         model_config = ModelConfig(name=model_name)
-        config_text = f"""
-        name: "{model_config.name}"
+        config_text = f"""name: "{model_config.name}"
         platform: "{model_config.platform}"
         max_batch_size: {model_config.max_batch_size}
         input: [    
         {{
-            "name": "actual_input", 
-            "data_type": "{model_config.input_dtype}", 
-            "dims": {model_config.input_dims}
+            name: "actual_input", 
+            data_type: {model_config.input_dtype}, 
+            dims: {model_config.input_dims}
         }}
         ]
         output: [ {{
-            "name": "output",
-            "data_type": "{model_config.output_dtype}",
-            "dims": {model_config.output_dims}
+            name: "output",
+            data_type: {model_config.output_dtype},
+            dims: {model_config.output_dims}
         }}]
         """
         config_path = model_dir / "config.pbtxt"
-        # config_path.write_text(config_text.strip())
+        config_path.write_text(config_text.strip())
 
         logger.info("Model downloaded and prepared successfully.")
         return str(model_dir)
@@ -82,9 +89,9 @@ def download_mlflow_model(mlflow_url: str, model_name: str, model_version: int, 
     except mlflow.exceptions.MlflowException as e:
         logger.error(f"MLflow error: {e}")
         raise
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        raise
+    # except Exception as e:
+    #     logger.error(f"Unexpected error: {e}")
+    #     raise
 
 def deploy_triton_model(model_name: str, model_path: str):
     """Deploy a Triton model."""
@@ -119,13 +126,11 @@ def deploy_triton_model(model_name: str, model_path: str):
 if __name__ == "__main__":
     mlflow_url = "http://13.127.65.67:5000"
     model_name = "triton_test_model_1"
-    model_version = 2
+    model_version = 4
     output_path = "/tmp/models"
-    runs_id = "e694558ad8bb47efbd636141a23b016f"
-    model = "model_onnx_best"
 
     try:
-        model_path = download_mlflow_model(mlflow_url, model_name, model_version, output_path, runs_id,model)
+        model_path = download_mlflow_model(mlflow_url, model_name, model_version, output_path)
         deploy_triton_model(model_name, model_path)
     except Exception as e:
         logger.error(f"Script failed: {e}")
